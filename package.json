@@ -1,0 +1,12 @@
+{
+  "name": "antojitos-al-paso-root",
+  "version": "1.0.0",
+  "description": "Scripts raíz — delega a pos-system/",
+  "scripts": {
+    "install:panel": "cd pos-system && npm install",
+    "dev":   "cd pos-system && npm run dev",
+    "build": "cd pos-system && npm run build",
+    "preview": "cd pos-system && npm run preview"
+  },
+  "private": true
+}

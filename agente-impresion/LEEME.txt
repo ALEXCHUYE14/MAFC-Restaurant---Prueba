@@ -1,0 +1,32 @@
+AGENTE DE IMPRESIÓN POR RED (Wi-Fi / LAN)
+==========================================
+
+Sirve para que los celulares de los meseros impriman en tiketeras de RED
+(con cable de red o Wi-Fi), sin Bluetooth y sin límite de distancia.
+
+1. En Supabase → SQL Editor: ejecutar migracion-impresion-red.sql (una vez).
+
+2. Dar a cada tiketera una IP FIJA en la red del local (en el router o desde
+   el menú de la tiketera). Ej.: 192.168.1.200 (Cocina), 192.168.1.201 (Barra).
+
+3. Panel admin → Ajustes → Impresoras de red:
+   - Agregar cada tiketera (nombre, IP, puerto 9100, ancho 80 mm = 48 col.).
+   - Pulsar "Generar token del agente" y copiarlo (solo se muestra una vez).
+
+4. En una PC del local (encendida durante la atención, en la misma red que
+   las tiketeras):
+   - Instalar Node.js 18 o superior (https://nodejs.org).
+   - Copiar esta carpeta "agente-impresion".
+   - Copiar config.ejemplo.json como config.json y llenar los datos.
+   - Abrir una terminal en la carpeta y ejecutar:  node agente-impresion.js
+   (Para que arranque solo al prender la PC: crear un acceso directo a
+    "node agente-impresion.js" en la carpeta Inicio de Windows.)
+
+5. En cada celular de mesero → Ajustes → Impresoras: cambiar el tipo de la
+   impresora a "Red (Wi-Fi)" y elegir la tiketera. Probar con "Imprimir prueba".
+
+Notas:
+- config.json contiene el token: no compartirlo. Si se filtra, generar uno
+  nuevo en Ajustes (el anterior deja de funcionar al instante).
+- Si la tiketera está apagada, el ticket se reintenta hasta 5 veces y
+  aparece como error en Ajustes → Impresoras de red.

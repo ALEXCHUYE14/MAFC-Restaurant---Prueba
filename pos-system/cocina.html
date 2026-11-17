@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#F2F6FE">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Cocina — Restaurante POS">
+<title>Panel Cocina — Restaurante POS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="icon" href="/img/logo/Antojitos.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════
+   DESIGN SYSTEM — "Luz Profesional"
+═══════════════════════════════════════════ */
+:root {
+  /* Backgrounds — light profesional */
+  --ink:        #F2F6FE;
+  --ink1:       #FFFFFF;
+  --ink2:       #FFFFFF;
+  --ink3:       #F4F7FD;
+  --ink4:       #EBF1FB;
+  --ink5:       #E2E8F5;
+
+  /* Bordes */
+  --line:       #E2E8F0;
+  --line2:      #CBD5E1;
+  --line3:      #94A3B8;
+
+  /* Acentos */
+  --amber:      #F59E0B;
+  --amber2:     #D97706;
+  --flame:      #F97316;
+  --crimson:    #EF4444;
+  --crimson2:   #DC2626;
+  --emerald:    #10B981;
+  --emerald2:   #059669;
+  --sapphire:   #3B82F6;
+  --violet:     #8B5CF6;
+
+  /* Texto — oscuro sobre claro */
+  --snow:       #1E293B;
+  --mist:       #475569;
+  --fog:        #64748B;
+  --ghost:      #94A3B8;
+
+  --display:    'Bebas Neue', sans-serif;
+  --body:       'Outfit', sans-serif;
+  --mono:       'JetBrains Mono', monospace;
+  --r:          14px;
+  --r2:         9px;
+  --r3:         5px;
+  --ease:       cubic-bezier(0.22,1,0.36,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; overflow: hidden; }
+body {
+  height: 100%; font-family: var(--body);
+  background: var(--ink); color: var(--snow);
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+#root { height: 100%; display: flex; flex-direction: column; }
+button { cursor: pointer; font-family: var(--body); border: none; }
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line3); border-radius: 2px; }
+
+body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(ellipse 700px 500px at 15% 0%,  rgba(59,130,246,0.05) 0%, transparent 70%),
+    radial-gradient(ellipse 500px 400px at 85% 100%, rgba(16,185,129,0.04) 0%, transparent 70%);
+}
+
+/* ═══ KEYFRAMES ═══════════════════════════════ */
+@keyframes fadeUp     { from { opacity:0; transform:translateY(14px) } to { opacity:1; transform:translateY(0) } }
+@keyframes slideDown  { from { opacity:0; transform:translateY(-20px) } to { opacity:1; transform:translateY(0) } }
+@keyframes slideUp    { from { opacity:0; transform:translateY(20px) }  to { opacity:1; transform:translateY(0) } }
+@keyframes spin       { to { transform:rotate(360deg) } }
+@keyframes blink      { 0%,100%{opacity:1} 50%{opacity:0.25} }
+@keyframes pulseBtn   { 0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,0.45)} 50%{box-shadow:0 0 0 8px rgba(16,185,129,0)} }
+@keyframes newCard    { 0%{box-shadow:0 0 0 2px rgba(245,158,11,0.7)} 100%{box-shadow:0 0 0 0 rgba(245,158,11,0)} }
+@keyframes urgWarn    { 0%,100%{box-shadow:0 0 0 1px rgba(245,158,11,0.45)} 50%{box-shadow:0 0 12px 2px rgba(245,158,11,0.2)} }
+@keyframes urgCrit    { 0%,100%{box-shadow:0 0 0 1px rgba(239,68,68,0.55)} 50%{box-shadow:0 0 18px 3px rgba(239,68,68,0.25)} }
+@keyframes modalIn    { from{opacity:0;transform:scale(.96)} to{opacity:1;transform:scale(1)} }
+@keyframes bannerIn   { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+@keyframes pulseNew   { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.4)} 60%{box-shadow:0 0 0 7px rgba(245,158,11,0)} }
+@keyframes newBatchGlow { 0%,100%{box-shadow:inset 0 0 0 2px rgba(245,158,11,.9), 0 0 14px 1px rgba(245,158,11,.35)} 50%{box-shadow:inset 0 0 0 2px rgba(217,119,6,.55), 0 0 4px 0 rgba(245,158,11,.1)} }
+@keyframes newBatchBg   { 0%,100%{background-color:#FDE68A} 50%{background-color:#FCD34D} }
+@keyframes newTagPop    { 0%{transform:scale(.85)} 50%{transform:scale(1.08)} 100%{transform:scale(1)} }
+
+.spinner {
+  border: 2.5px solid var(--line2);
+  border-top-color: var(--amber);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  display: inline-block;
+}
+
+/* ═══ DARK MODE — "Cocina Nocturna" ════════════════════════════════════════ */
+[data-theme="dark"] {
+  --ink:   #0F172A;
+  --ink1:  #1E293B;
+  --ink2:  #1C2333;
+  --ink3:  #334155;
+  --ink4:  #475569;
+  --ink5:  #64748B;
+  --line:  #2D3B55;
+  --line2: #3D5070;
+  --line3: #64748B;
+  --snow:  #F1F5F9;
+  --mist:  #CBD5E1;
+  --fog:   #94A3B8;
+  --ghost: #64748B;
+}
+[data-theme="dark"] body { background: var(--ink); color: var(--snow); }
+[data-theme="dark"] body::before {
+  background:
+    radial-gradient(ellipse 700px 500px at 15% 0%, rgba(59,130,246,0.07) 0%, transparent 70%),
+    radial-gradient(ellipse 500px 400px at 85% 100%, rgba(16,185,129,0.06) 0%, transparent 70%);
+}
+
+/* Transición suave al cambiar de tema */
+.color-theme-in-transition,
+.color-theme-in-transition * {
+  transition: background-color 0.3s ease, border-color 0.25s ease,
+              color 0.2s ease, box-shadow 0.25s ease !important;
+}
+
+</style>
+<script>
+/* Aplica el tema guardado ANTES de que React renderice — evita FOUC */
+(function(){
+  var t = localStorage.getItem('antojitos_theme') || 'light';
+  document.documentElement.setAttribute('data-theme', t);
+})();
+/* Muestra error amigable si un CDN falla en cargar (en vez de pantallazo azul) */
+window.addEventListener('error', function(ev) {
+  var tag = ev.target && ev.target.tagName;
+  if (tag === 'SCRIPT' || tag === 'LINK') {
+    setTimeout(function() {
+      var root = document.getElementById('root');
+      if (root && !root.firstChild) {
+        root.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;font-family:system-ui;text-align:center;padding:32px"><div style="font-size:48px">⚠️</div><div style="font-size:18px;font-weight:700;color:#EF4444">Error al cargar recursos</div><div style="font-size:13px;color:#64748B;max-width:300px;line-height:1.6">No se pudo cargar un recurso necesario (CDN).<br>Verifica tu conexión a internet.</div><button onclick="location.reload()" style="margin-top:12px;padding:10px 24px;background:#F59E0B;color:#000;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">⟳ Recargar</button></div>';
+      }
+    }, 200);
+  }
+}, true);
+</script>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/src-apps/cocina/main.jsx"></script>
+</body>
+</html>

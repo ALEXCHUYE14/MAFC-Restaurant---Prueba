@@ -1,0 +1,253 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --display: 'Bebas Neue', 'Arial Narrow', Arial, sans-serif;
+  --mono:    'JetBrains Mono', 'Courier New', Courier, monospace;
+
+  /* ── Superficies — Enterprise Light (Stripe / Vercel style) ─────────────
+     Fondos claros con profundidad vía sombras suaves, no bordes oscuros.  */
+  --ink:   #F8FAFC;   /* página — slate-50                  */
+  --ink1:  #FFFFFF;   /* headers / sidebar — blanco puro    */
+  --ink2:  #FFFFFF;   /* tarjetas — blanco puro             */
+  --ink3:  #F1F5F9;   /* paneles internos / inputs — slate-100 */
+  --ink4:  #E2E8F0;   /* hover — slate-200                  */
+  --ink5:  #CBD5E1;   /* elevado fuerte — slate-300         */
+
+  /* ── Bordes — slate muy claro ──────────────────────────────────────────── */
+  --line:  #E2E8F0;   /* separador sutil — slate-200        */
+  --line2: #CBD5E1;   /* borde estándar — slate-300         */
+  --line3: #94A3B8;   /* borde visible — slate-400          */
+
+  /* ── Acento principal — Azul Corporativo ───────────────────────────────── */
+  --amber:  #2563EB;  /* acento principal — blue-600        */
+  --amber2: #1D4ED8;  /* hover — blue-700                   */
+  --amber3: #1E40AF;  /* pressed — blue-800                 */
+  --flame:  #EA580C;  /* naranja/pendiente — orange-600     */
+  --crimson:  #DC2626;/* peligro — red-600                  */
+  --crimson2: #B91C1C;/* pressed danger — red-700           */
+  --emerald:  #16A34A;/* éxito — green-600                  */
+  --emerald2: #15803D;/* pressed success — green-700        */
+  --sapphire: #0EA5E9;/* info — sky-500                     */
+  --violet:   #7C3AED;/* Yape — violet-600                  */
+
+  /* ── Texto — oscuro sobre fondo claro ─────────────────────────────────── */
+  --snow:   #0F172A;  /* primario — slate-900               */
+  --mist:   #475569;  /* secundario — slate-600             */
+  --fog:    #94A3B8;  /* terciario — slate-400              */
+  --ghost:  #CBD5E1;  /* disabled — slate-300               */
+
+  /* ── Sombras suaves (soft shadows) — dan profundidad sin bordes oscuros── */
+  --shadow-sm:   0 1px 2px rgba(0,0,0,.05);
+  --shadow-card: 0 1px 3px rgba(0,0,0,.07), 0 2px 8px rgba(0,0,0,.04);
+  --shadow-md:   0 4px 16px rgba(0,0,0,.09);
+  --shadow-lg:   0 8px 32px rgba(0,0,0,.11);
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --r:  14px;
+  --r2:  9px;
+  --r3:  5px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; }
+body {
+  height: 100%;
+  font-family: 'Outfit', sans-serif;
+  background: var(--ink);
+  color: var(--snow);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+#root { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+input, button, select, textarea { font-family: 'Outfit', sans-serif; }
+button { cursor: pointer; }
+img { user-select: none; }
+
+/* ── Scrollbar — tono claro ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--ink3); }
+::-webkit-scrollbar-thumb { background: var(--line3); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--mist); }
+
+/* ── Keyframes ─────────────────────────────────────────────────────────── */
+@keyframes fadeUp    { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes fadeIn    { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideUp   { from { opacity: 0; transform: translateY(100%) } to { opacity: 1; transform: translateY(0) } }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-16px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes scaleIn   { from { opacity: 0; transform: scale(0.88) } to { opacity: 1; transform: scale(1) } }
+@keyframes popIn     { 0% { transform: scale(0) } 60% { transform: scale(1.25) } 100% { transform: scale(1) } }
+@keyframes pulseGlow { 0%,100% { box-shadow: 0 0 0 0 rgba(37,99,235,.22) } 50% { box-shadow: 0 0 0 10px rgba(37,99,235,0) } }
+@keyframes shimmer   { 0% { background-position: -200% center } 100% { background-position: 200% center } }
+@keyframes orbFloat  { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-8px) } }
+@keyframes ringPulse { 0% { transform: scale(1); opacity: 1 } 100% { transform: scale(1.8); opacity: 0 } }
+@keyframes blink     { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
+@keyframes toastIn   { from { opacity: 0; transform: translateX(100%) } to { opacity: 1; transform: translateX(0) } }
+@keyframes toastOut  { from { opacity: 1; transform: translateX(0) } to { opacity: 0; transform: translateX(100%) } }
+@keyframes spin      { to { transform: rotate(360deg) } }
+
+.anim-fade-up    { animation: fadeUp    .3s var(--ease) forwards; }
+.anim-scale-in   { animation: scaleIn   .25s var(--ease) forwards; }
+.anim-slide-up   { animation: slideUp   .38s var(--ease) forwards; }
+.anim-slide-down { animation: slideDown .25s var(--ease) forwards; }
+.anim-pop-in     { animation: popIn     .25s ease forwards; }
+.anim-blink      { animation: blink     1.2s ease-in-out infinite; }
+.anim-shimmer    { animation: shimmer   1.5s linear infinite; }
+.anim-spin       { animation: spin      1s linear infinite; }
+.anim-orb-float  { animation: orbFloat  2.5s ease-in-out infinite; }
+.anim-pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
+.toast-enter     { animation: toastIn   .3s var(--ease) forwards; }
+.toast-exit      { animation: toastOut  .25s var(--ease) forwards; }
+
+/* ── Shimmer skeleton — light mode ──────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg, var(--ink4) 25%, var(--ink3) 50%, var(--ink4) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s linear infinite;
+  border-radius: var(--r2);
+}
+
+/* ── Ambient glow — desactivado en light mode ───────────────────────────── */
+.ambient-bg::before { display: none; }
+
+/* ── Grain — desactivado en light mode ─────────────────────────────────── */
+.grain::after { display: none; }
+
+/* ── Top accent line — sutil separador azul ─────────────────────────────── */
+.topline::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+  background: var(--line);
+  opacity: 1;
+}
+
+/* ── Thermal Receipt Print ───────────────────────────────────────────────── */
+@media print {
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  body > * { display: none !important; }
+  #thermal-receipt-print { display: block !important; }
+}
+#thermal-receipt-print {
+  display: none;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 13px;
+  width: 76mm;
+  color: #000;
+  background: #fff;
+  padding: 4mm;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   RESPONSIVE — Mobile-First · Panel Administrativo
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Admin: Sidebar lateral (visible solo en desktop ≥ 768px) ─────── */
+.admin-sidebar    { display: flex; }
+.admin-bottomnav  { display: none; }
+/* Barras de navegación desplazables: sin barra de scroll visible (se
+   desliza con el dedo / rueda) y con un leve desvanecido en los bordes
+   que indica que hay más secciones. */
+.admin-bottomnav, .admin-sidebar {
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.admin-bottomnav::-webkit-scrollbar, .admin-sidebar::-webkit-scrollbar { display: none; }
+.admin-bottomnav {
+  scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+          mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+}
+
+/* Área de contenido principal — padding gestionado por CSS */
+.admin-content-area {
+  flex: 1;
+  overflow: hidden;
+  padding-bottom: 0;
+  transition: padding .2s var(--ease);
+}
+
+/* ── Admin: menú del usuario (chip del header → Cerrar sesión) ─────── */
+.admin-user-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+.admin-user-menu { animation: slideDown .18s var(--ease) both; transform-origin: top right; }
+@media (max-width: 767px) {
+  .admin-user-name { max-width: 72px; }
+}
+
+/* ── Kitchen: columnas Kanban (siempre visibles en desktop) ────────── */
+.kitchen-mobile-tabs { display: none; }
+
+/* ── Mobile breakpoint: < 768px ────────────────────────────────────── */
+@media (max-width: 767px) {
+
+  /* Oculta el sidebar lateral */
+  .admin-sidebar     { display: none !important; }
+
+  /* Muestra la barra de navegación inferior */
+  .admin-bottomnav   { display: flex !important; }
+
+  /* Área de contenido: deja espacio para el bottom nav */
+  .admin-content-area { padding-bottom: 62px; }
+
+  /* Kitchen: muestra tabs de columna, oculta columnas inactivas */
+  .kitchen-mobile-tabs { display: flex !important; }
+  .kitchen-col-hidden  { display: none !important; }
+
+  /* Inputs y botones táctiles: mínimo 44px de altura */
+  input, select, textarea { min-height: 44px; }
+  button { min-height: 44px; }
+
+  /* Evitar desbordamiento horizontal global */
+  body { overflow-x: hidden; }
+}
+
+/* ── Teclado virtual: en desktop arranca a la derecha del sidebar ─── */
+.admin-vkb { left: 64px; }
+
+@media (max-width: 767px) {
+  /* En móvil el sidebar no existe, teclado ocupa todo el ancho */
+  .admin-vkb { left: 0 !important; }
+}
+
+/* ── Tablet breakpoint: 768px – 1023px ─────────────────────────────── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* El sidebar se mantiene pero el contenido se adapta */
+  .admin-content-area { padding-bottom: 0; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   DARK MODE — "Noche Profesional"
+   Activado con data-theme="dark" en <html>
+   ══════════════════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
+  --ink:   #0F172A;  /* slate-900  — fondo principal     */
+  --ink1:  #1E293B;  /* slate-800  — sidebar / header    */
+  --ink2:  #1C2333;  /* slate-800- — tarjetas            */
+  --ink3:  #334155;  /* slate-700  — paneles / inputs    */
+  --ink4:  #475569;  /* slate-600  — hover               */
+  --ink5:  #64748B;  /* slate-500  — elevado fuerte      */
+  --line:  #2D3B55;  /* separador sutil                  */
+  --line2: #3D5070;  /* borde estándar                   */
+  --line3: #64748B;  /* borde visible                    */
+  --snow:  #F1F5F9;  /* slate-100  — texto primario      */
+  --mist:  #CBD5E1;  /* slate-300  — texto secundario    */
+  --fog:   #94A3B8;  /* slate-400  — texto terciario     */
+  --ghost: #64748B;  /* slate-500  — desactivado         */
+  --shadow-sm:   0 1px 2px rgba(0,0,0,.4);
+  --shadow-card: 0 1px 4px rgba(0,0,0,.4), 0 2px 10px rgba(0,0,0,.25);
+  --shadow-md:   0 4px 18px rgba(0,0,0,.5);
+  --shadow-lg:   0 8px 36px rgba(0,0,0,.6);
+}
+[data-theme="dark"] body    { background: var(--ink); color: var(--snow); }
+[data-theme="dark"] .skeleton {
+  background: linear-gradient(90deg, var(--ink4) 25%, var(--ink3) 50%, var(--ink4) 75%);
+  background-size: 200% 100%;
+}
+
+/* ── Transición suave al cambiar de tema (clase aplicada brevemente) ── */
+.color-theme-in-transition,
+.color-theme-in-transition * {
+  transition: background-color 0.3s ease, border-color 0.25s ease,
+              color 0.2s ease, box-shadow 0.25s ease !important;
+}

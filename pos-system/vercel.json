@@ -1,0 +1,10 @@
+{
+  "rewrites": [
+    { "source": "/mesero.html", "destination": "/mesero.html" },
+    { "source": "/cocina.html", "destination": "/cocina.html" },
+    { "source": "/carta.html",  "destination": "/carta.html"  },
+    { "source": "/carta",       "destination": "/carta.html"  },
+    { "source": "/encuesta.html", "destination": "/encuesta.html" },
+    { "source": "/(.*)",        "destination": "/index.html"  }
+  ]
+}

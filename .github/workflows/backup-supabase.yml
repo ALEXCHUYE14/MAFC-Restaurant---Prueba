@@ -1,0 +1,56 @@
+name: Backup diario de Supabase
+
+# ══════════════════════════════════════════════════════════════════
+# Respaldo automático de la base de datos (pg_dump) — corre solo,
+# todos los días, sin intervención manual.
+#
+# CONFIGURACIÓN REQUERIDA (una sola vez):
+#   1. En Supabase → Project Settings → Database → Connection string
+#      → copia la "Connection string" en modo "URI" (session pooler,
+#      puerto 5432 o 6543).
+#   2. En GitHub → este repositorio → Settings → Secrets and variables
+#      → Actions → New repository secret:
+#        Nombre: SUPABASE_DB_URL
+#        Valor:  la connection string del paso 1 (incluye el password)
+#   3. Listo — desde el próximo día corre solo a las 03:00 (hora Perú).
+#      También puedes lanzarlo a mano desde la pestaña "Actions" del
+#      repositorio con el botón "Run workflow".
+#
+# Dónde queda el respaldo: como "artifact" adjunto a cada ejecución en
+# la pestaña Actions (se conserva 30 días — súbelo a algún storage
+# propio si necesitas retenerlo más tiempo). No se sube nada a git.
+# ══════════════════════════════════════════════════════════════════
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # 03:00 hora Perú (UTC-5) = 08:00 UTC
+  workflow_dispatch: {}     # permite lanzarlo manualmente desde GitHub
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que el secreto esté configurado
+        run: |
+          if [ -z "${{ secrets.SUPABASE_DB_URL }}" ]; then
+            echo "::error::Falta el secreto SUPABASE_DB_URL — configúralo en Settings → Secrets and variables → Actions antes de que este workflow pueda funcionar."
+            exit 1
+          fi
+
+      - name: Instalar cliente de PostgreSQL (pg_dump)
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Generar el dump
+        run: |
+          FECHA=$(date +%Y-%m-%d)
+          pg_dump "${{ secrets.SUPABASE_DB_URL }}" \
+            --no-owner --no-privileges --format=custom \
+            --file="antojitos-backup-${FECHA}.dump"
+          echo "BACKUP_FILE=antojitos-backup-${FECHA}.dump" >> "$GITHUB_ENV"
+
+      - name: Subir el respaldo como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BACKUP_FILE }}
+          path: ${{ env.BACKUP_FILE }}
+          retention-days: 30
