@@ -7,7 +7,9 @@ import OrderCard from '@/features/orders/OrderCard'
 import { formatPEN } from '@/utils/currency'
 import { formatFullDate } from '@/utils/dates'
 import { generateDailySalesReport } from '@/utils/pdf'
-import { DB, DEMO_MODE, isMissingRpcError } from '@/services/supabase'
+import { DB, DEMO_MODE, isMissingRpcError, supabase } from '@/services/supabase'
+import ComprobanteModal from '@/features/facturacion/ComprobanteModal'
+import { FACTURACION_ACTIVA, obtenerComprobantes, NOMBRE_TIPO, ESTADOS } from '@/features/facturacion/facturacion'
 import { printReceipt } from '@/utils/print'
 import * as IDB from '@/services/offlineDB'
 import {
@@ -96,6 +98,9 @@ export default function CashierPanel() {
   const [cierreResumen, setCierreResumen] = useState(null)
   const lastPrintRef                      = useRef(null)
   const [printBanner,   setPrintBanner]   = useState(null)
+  // Facturación electrónica (VITE_FACTURACION_ELECTRONICA=1)
+  const [comprobantePara, setComprobantePara] = useState(null)   // { orderId, total, titulo }
+  const [comprobantes,    setComprobantes]    = useState({})     // { [order_id]: comprobante }
   // Verificación previa al cierre (migracion-cierres-turno.sql): resumen
   // calculado en el servidor + pedidos sin cobrar. source: 'server' | 'local' | 'error'
   const [cierreInfo,        setCierreInfo]        = useState(null)
@@ -160,6 +165,10 @@ export default function CashierPanel() {
     lastPrintRef.current = printData
     printReceipt(printData)
 
+    if (FACTURACION_ACTIVA) {
+      setComprobantePara({ orderId, total: orderSnapshot.total || 0, titulo: tituloPedido(orderSnapshot) })
+    }
+
     const pmName = PM_DISPLAY[changes.payment_method] || changes.payment_method
     setPrintBanner({ msg: `✓ Cobrado · ${pmName}`, pm: changes.payment_method })
     setTimeout(() => setPrintBanner(null), 12000)
@@ -174,6 +183,14 @@ export default function CashierPanel() {
 
   // Ventas cobradas — usa todaySales del contexto (idéntico al PANEL)
   const paid = todaySales
+
+  // Comprobantes electrónicos ya emitidos de las ventas cobradas
+  const paidIdsKey = useMemo(() => (paid || []).map(o => o.id).join(','), [paid])
+  const recargarComprobantes = useCallback(() => {
+    if (!FACTURACION_ACTIVA || !paidIdsKey) return
+    obtenerComprobantes(supabase, paidIdsKey.split(',')).then(setComprobantes).catch(() => {})
+  }, [paidIdsKey])
+  useEffect(() => { recargarComprobantes() }, [recargarComprobantes])
 
   const totalRevenue = useMemo(() =>
     paid.reduce((s, o) => s + (o.total || 0), 0), [paid])
@@ -1005,12 +1022,19 @@ export default function CashierPanel() {
       {/* ── Lista de órdenes ── */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {(tab === 'pending' ? served : paid).map(order => (
-          <OrderCard
-            key={order.id}
-            order={order}
-            role="cashier"
-            onUpdate={tab === 'pending' ? handleUpdate : updateOrder}
-          />
+          <div key={order.id}>
+            <OrderCard
+              order={order}
+              role="cashier"
+              onUpdate={tab === 'pending' ? handleUpdate : updateOrder}
+            />
+            {FACTURACION_ACTIVA && tab === 'paid' && (
+              <ComprobanteChip
+                c={comprobantes[order.id]}
+                onClick={() => setComprobantePara({ orderId: order.id, total: order.total || 0, titulo: tituloPedido(order) })}
+              />
+            )}
+          </div>
         ))}
 
         {(tab === 'pending' ? served : paid).length === 0 && (
@@ -1027,6 +1051,48 @@ export default function CashierPanel() {
           </div>
         )}
       </div>
+      {comprobantePara && (
+        <ComprobanteModal
+          sb={supabase}
+          orderId={comprobantePara.orderId}
+          total={comprobantePara.total}
+          titulo={comprobantePara.titulo}
+          emitidoPor={user?.name || 'Caja'}
+          onEmitido={recargarComprobantes}
+          onClose={() => { setComprobantePara(null); recargarComprobantes() }}
+        />
+      )}
     </div>
+  )
+}
+
+function tituloPedido(o) {
+  if (o?.table_number > 0) return `Mesa ${o.table_number}`
+  return o?.zone || 'Pedido'
+}
+
+// Barra bajo cada venta cobrada: número del comprobante o botón para emitirlo
+function ComprobanteChip({ c, onClick }) {
+  const estado = c ? (ESTADOS[c.estado] || { label: c.estado, color: '#64748B' }) : null
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%', marginTop: 4, padding: '7px 12px', borderRadius: 10, cursor: 'pointer',
+        border: `1.5px ${c ? 'solid' : 'dashed'} ${c ? estado.color : 'var(--line2)'}`,
+        background: c ? `${estado.color}12` : 'transparent',
+        color: c ? estado.color : 'var(--mist)', fontSize: 12, fontWeight: 700,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+      }}
+    >
+      {c ? (
+        <>
+          <span><FileText size={13} style={{ verticalAlign: -2 }}/> {NOMBRE_TIPO[c.tipo_doc] || 'Comprobante'} {c.numero}</span>
+          <span style={{ fontWeight: 600 }}>{estado.label}</span>
+        </>
+      ) : (
+        <span><FileText size={13} style={{ verticalAlign: -2 }}/> Emitir boleta o factura</span>
+      )}
+    </button>
   )
 }

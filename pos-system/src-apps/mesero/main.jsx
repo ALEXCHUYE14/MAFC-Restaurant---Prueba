@@ -27,6 +27,8 @@ import {
   Bell, ScanLine, CameraOff, ImagePlus, Wifi, Link2, Unlink, UserRound, UserPlus, Gift,
 } from 'lucide-react'
 import { decodeOrderQr } from '@/utils/orderQr'
+import ComprobanteModal from '@/features/facturacion/ComprobanteModal'
+import { FACTURACION_ACTIVA } from '@/features/facturacion/facturacion'
 import { normalizeVariants, hasVariants, applyVariant, findVariant, lineIdFromLine, minVariantPrice } from '@/utils/variants'
 import { clampPackaging, packagingTotal, itemsTotal, fetchPackagingConfig, PACKAGING_MAX } from '@/utils/packaging'
 import { normalizeDoc, crmErrorMessage, isCrmMissing, discountAmount } from '@/utils/crm'
@@ -5254,6 +5256,8 @@ function App() {
   const [showCart,setShowCart]             = useState(false);
   const [showTicket,setShowTicket]         = useState(false);
   const [showPayment,setShowPayment]       = useState(false);
+  // Facturación electrónica: pedido recién cobrado al que se le ofrece boleta/factura
+  const [comprobantePara,setComprobantePara] = useState(null);
   const [showSuccess,setShowSuccess]       = useState(null);
   // WiFi printer UI eliminado — solo Bluetooth + ventana web como fallback
   const [toasts,setToasts]         = useState([]);
@@ -6809,6 +6813,8 @@ function App() {
       : `${PAYMENT_METHODS_M.find(m => m.key === method)?.label || 'Efectivo'} ${PAYMENT_METHODS_M.find(m => m.key === method)?.icon || '💵'}`;
     toast(`Mesa ${selectedTable} cerrada · ${fmt(total)} · ${label}`, 'ok');
     setShowPayment(false);
+    // Facturación electrónica (VITE_FACTURACION_ELECTRONICA=1): ofrecer boleta/factura
+    if (FACTURACION_ACTIVA && orderId) setComprobantePara({ orderId, mesa: selectedTable, total });
     setSelectedTable(null);
     setPage('mesas');
   };
@@ -6993,6 +6999,18 @@ function App() {
           onClose={()=>setShowPayment(false)}
           packaging={tablePack(currentTable)}
           descuento={tableDiscount(currentTable)}
+        />
+      )}
+
+      {/* COMPROBANTE ELECTRÓNICO (boleta / factura) — después de cobrar */}
+      {comprobantePara && (
+        <ComprobanteModal
+          sb={_supabase}
+          orderId={comprobantePara.orderId}
+          total={comprobantePara.total}
+          titulo={`Mesa ${comprobantePara.mesa}`}
+          emitidoPor={waiter?.name}
+          onClose={() => setComprobantePara(null)}
         />
       )}
 

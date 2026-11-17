@@ -7,3 +7,6 @@ public/img/
 test-results/
 playwright-report/
 blob-report/
+
+# Variables locales (no se suben a GitHub)
+.env.local

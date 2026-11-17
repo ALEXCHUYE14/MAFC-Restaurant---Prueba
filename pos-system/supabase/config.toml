@@ -1,0 +1,7 @@
+# Supabase CLI — solo se usa para desplegar la Edge Function de facturación.
+project_id = "fvzosidupnnjowbbipbo"
+
+[functions.emitir-comprobante]
+# La app del mesero no usa Supabase Auth (login por PIN): la función no exige JWT.
+# Su protección: solo factura pedidos COBRADOS, una sola vez, con montos leídos de la BD.
+verify_jwt = false
