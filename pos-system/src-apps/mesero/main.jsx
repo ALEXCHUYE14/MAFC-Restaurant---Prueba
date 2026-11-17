@@ -1120,20 +1120,68 @@ const printComandaWeb = (mesa, items, waiter, zone, isModification = false, roun
   else { alert('⚠ El navegador bloqueó la ventana de impresión.\nPor favor permite ventanas emergentes (pop-ups) para este sitio e intenta de nuevo.'); }
 };
 
-/* TICKET TEXT WEB PRINT — para texto preformateado (ticket de pre-cuenta) */
+/* ESC/POS → texto plano. Los tickets (pre-cuenta/comanda) llevan comandos
+   ESC/POS para la térmica (ESC E n = negrita, GS ! n = tamaño, ESC @ = reset).
+   Una impresora vía navegador/driver NO los entiende y los imprime como
+   basura ("!", "E", cuadritos). Esto los quita, sin tocar el texto. */
+const stripEscPos = text => String(text ?? '')
+  .replace(/\x1b@/g, '')
+  .replace(/[\x1b\x1d][\x20-\x7e][\x00-\xff]/g, '')   // ESC/GS + comando + 1 parámetro
+  .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '');           // cualquier control suelto (menos \n)
+
+/* ESC/POS → HTML: conserva la negrita y el alto doble como estilos, en vez
+   de imprimir los bytes de control. Todo el texto se escapa (sin XSS). */
+const escPosToHtml = text => {
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let bold = false, tall = false, out = '', buf = '';
+  const flush = () => {
+    if (!buf) return;
+    const cls = [bold && 'b', tall && 't'].filter(Boolean).join(' ');
+    // Los saltos de línea quedan fuera del span (el alto doble no los afecta)
+    out += buf.split('\n').map(seg => seg ? (cls ? `<span class="${cls}">${esc(seg)}</span>` : esc(seg)) : '').join('\n');
+    buf = '';
+  };
+  const s = String(text ?? '');
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\x1b' && s[i+1] === '@') { flush(); bold = false; tall = false; i += 1; continue; }
+    if (c === '\x1b' && s[i+1] === 'E' && i + 2 < s.length) { flush(); bold = s.charCodeAt(i+2) % 2 === 1; i += 2; continue; }
+    if (c === '\x1d' && s[i+1] === '!' && i + 2 < s.length) { flush(); tall = (s.charCodeAt(i+2) & 0x0f) > 0; i += 2; continue; }
+    if ((c === '\x1b' || c === '\x1d') && i + 2 < s.length) { flush(); i += 2; continue; } // otro comando: se descarta
+    if (c !== '\n' && /[\x00-\x1f\x7f]/.test(c)) continue;
+    buf += c;
+  }
+  flush();
+  return out;
+};
+
+/* TICKET TEXT WEB PRINT — para texto preformateado (ticket de pre-cuenta).
+   El tamaño de letra se calcula para que el renglón más largo ocupe EXACTO
+   el ancho del papel (58 u 80 mm): nunca se parte una línea ni se amontona. */
 const printTextWeb = (text, title = 'Ticket') => {
   const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const plain = stripEscPos(text).replace(/\s+$/, '');
+  const cols  = Math.max(24, Math.min(64, ...plain.split('\n').map(l => l.length)));
+  // Monoespaciada: 1 carácter ≈ 0.6em (+ margen de seguridad de 4%)
+  const ratio = (cols * 0.6 * 1.04).toFixed(2);
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(title)}</title>
   <style>
     @page { size: auto; margin: 2mm 1mm; }
     * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family:'Courier New',monospace; font-size:14px; font-weight:600; width:100%; max-width:80mm; color:#000; white-space:pre-wrap; word-break:break-word; }
-    @media print { button { display:none; } * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; } }
-  </style></head><body>${esc(text)}
+    html, body { background:#fff; }
+    body { width:100%; color:#000; }
+    pre { font-family:'Courier New',Courier,'Liberation Mono',monospace; font-weight:600;
+          font-size:min(calc(100vw / ${ratio}), 15px); line-height:1.35;
+          white-space:pre; overflow:hidden; margin:0; }
+    pre .b { font-weight:900; }
+    pre .t { display:inline-block; transform:scaleY(1.45); transform-origin:center; margin:0.25em 0; font-weight:900; }
+    @media print { * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; } }
+  </style></head><body><pre>${escPosToHtml(text).replace(/\s+$/, '')}</pre>
   <script>window.onload=()=>{window.print();window.onafterprint=()=>window.close();}<\/script>
   </body></html>`;
   const win = window.open('','_blank','width=380,height=500,toolbar=0');
   if(win){ win.document.write(html); win.document.close(); }
+  else { alert('⚠ El navegador bloqueó la ventana de impresión.\nPor favor permite ventanas emergentes (pop-ups) para este sitio e intenta de nuevo.'); }
 };
 
 /* COMANDA STRING — formato 58mm (32 ch) / 80mm (48 ch) para impresora térmica.
@@ -4286,7 +4334,7 @@ function TicketModal({mesa,items,waiter,zone,btConnected,cols,onPrint,onClose,pa
           <Printer size={18}/> Pre-cuenta
         </div>
         <div style={{fontSize:11,color:'var(--mist)',marginBottom:14}}>Mesa {mesa} · {zone}</div>
-        <div className="ticket-paper">{ticket}</div>
+        <div className="ticket-paper">{stripEscPos(ticket)}</div>
         <button className="cm-btn confirm" onClick={()=>onPrint(ticket)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
           {btConnected ? <><Printer size={16}/> Imprimir vía Bluetooth</> : <><Check size={16}/> Listo</>}
         </button>
