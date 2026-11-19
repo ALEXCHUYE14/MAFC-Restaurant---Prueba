@@ -491,49 +491,255 @@ async function syncSentOrderItems(orderId, localItems) {
   }
 }
 
-// finalItems (opcional): lo que realmente se cobró. Se guarda junto con el
-// pago para que el pedido refleje el total cobrado — y para que el trigger
-// del pago dividido valide contra ESE total (antes, si el mesero había
-// quitado algo ya enviado, el total guardado era el viejo y el pago dividido
-// era rechazado por la base).
-async function updateOrderPayment(orderId, paymentMethod, paymentBreakdown = null, finalItems = null, packCount = null) {
-  if (!orderId) return;
-  const statusLabel = buildPayStatusM(paymentMethod);
-  const payload = {
-    status:             statusLabel,
-    payment_method:     paymentMethod,
-    payment_breakdown:  paymentBreakdown,
-    paid_at:            new Date().toISOString(),
-    updated_at:         new Date().toISOString(),
-  };
-  // Nunca se sobrescribe con una lista vacía (p. ej. si el carrito local se perdió)
-  if (Array.isArray(finalItems) && finalItems.length) {
-    payload.items = orderItemsForDb(finalItems.map(i => ({ ...i, sentQty: i.qty })));
-    payload.total = orderTotalOf(finalItems);
-  }
-  // Envases: la base recalcula packaging_total y el total (platos + envases)
-  if (packCount !== null) payload.packaging_count = clampPackaging(packCount);
-  const { error } = await _supabase
-    .from('orders')
-    .update(payload)
-    .eq('id', orderId);
-  if (error) console.warn('Supabase update error:', error.message);
+/* ══════════════════════════════════════════════
+   COBROS A PRUEBA DE CORTES DE INTERNET (cola local)
+   ══════════════════════════════════════════════
+   Antes el cobro iba directo a Supabase y, si fallaba (sin señal a mitad
+   del pago), solo quedaba un console.warn: el celular liberaba la mesa y
+   decía "cerrada", pero el pedido seguía "pendiente" en el sistema y la
+   venta del mesero NO se registraba — se perdía en silencio.
+
+   Ahora cada cobro (efectivo, Yape, Plin, tarjeta o dividido) se guarda
+   PRIMERO en este celular y luego se sincroniza paso a paso:
+     1. pedido → pagado          (orders)          — idempotente
+     2. mesa   → libre           (mesas)           — solo si nadie la reabrió
+     3. venta(s) del mesero      (ventas_meseros)  — idempotente (client_op_id)
+   Cada paso confirmado se marca: si la conexión se corta a mitad, al
+   reintentar solo se repite lo que faltó, sin duplicar nada. Se reintenta
+   solo al volver internet, al volver a la app y periódicamente. Un cobro
+   SOLO sale de la cola cuando todo quedó registrado en el servidor.
+   La fecha/hora registrada es la del cobro real, no la de la sincronización.
+   Esta clave NO se borra al cerrar turno (a propósito).
+══════════════════════════════════════════════ */
+const PAY_OUTBOX_KEY     = 'antojitos_cobros_pendientes_v1';
+const PAY_OUTBOX_EVT     = 'antojitos-cobros-pendientes';
+const PAY_REQ_TIMEOUT_MS = 12000;
+const OPEN_ORDER_STATUSES = ['pending', 'preparing', 'ready', 'in_progress'];
+
+function readPayOutbox() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(PAY_OUTBOX_KEY) || '[]');
+    return Array.isArray(arr)
+      ? arr.filter(e => e && typeof e.opId === 'string' && e.done && Array.isArray(e.ventas))
+      : [];
+  } catch (_) { return []; }
+}
+function writePayOutbox(list) {
+  try { localStorage.setItem(PAY_OUTBOX_KEY, JSON.stringify(list)); }
+  catch (e) { console.warn('[Cobros] no se pudo guardar la cola local:', e?.message); return false; }
+  try { window.dispatchEvent(new Event(PAY_OUTBOX_EVT)); } catch (_) {}
+  return true;
+}
+// Lee-modifica-escribe sobre la versión MÁS RECIENTE (otra pestaña pudo cambiarla).
+// fn devuelve la entrada actualizada, o null para quitarla de la cola.
+function patchPayOutbox(opId, fn) {
+  const list = readPayOutbox();
+  const idx  = list.findIndex(e => e.opId === opId);
+  if (idx < 0) return null;
+  const next = fn(list[idx]);
+  if (next) list[idx] = next; else list.splice(idx, 1);
+  writePayOutbox(list);
+  return next;
+}
+function addToPayOutbox(entry) {
+  const list = readPayOutbox();
+  list.push(entry);
+  if (!writePayOutbox(list)) return false;
+  return readPayOutbox().some(e => e.opId === entry.opId); // verificado
+}
+function newOpId() {
+  try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID(); } catch (_) {}
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+// Mesas con un cobro cuya liberación aún no llegó al servidor
+function pendingCobroMesas() {
+  return new Set(readPayOutbox().filter(e => !e.done.mesa).map(e => e.mesa));
+}
+// Pedidos cobrados en este celular que el servidor aún ve como "abiertos"
+function pendingCobroOrderIds() {
+  return new Set(readPayOutbox().filter(e => !e.done.order && e.orderId).map(e => e.orderId));
+}
+// Ventas aún no registradas en el servidor (para mostrarlas en el turno)
+function pendingVentasFor(waiterId, since) {
+  const out = [];
+  readPayOutbox().forEach(e => {
+    if (e.waiterId !== waiterId || Date.parse(e.paidAt) < since.getTime()) return;
+    e.ventas.forEach((leg, idx) => {
+      if (e.done.ventas[idx]) return;
+      out.push({
+        id: `opq_${e.opId}_${idx}`, _opt: true, _pendiente: true,
+        client_op_id: `${e.opId}:${idx}`,
+        mesero_id: e.waiterId, mesero_nombre: e.waiterName, mesa_nro: e.mesa,
+        total: Math.round(Number(leg.monto) * 100) / 100, metodo_pago: leg.metodo,
+        zona: e.zona, fecha_hora: e.paidAt, items: e.ventaItems || [],
+      });
+    });
+  });
+  return out;
 }
 
-async function saveVentaMesero(meseroId, meseroNombre, mesaNro, total, metodoPago, zona, items) {
+// Ejecuta una consulta de Supabase con tiempo límite. Nunca lanza: devuelve {data, error}.
+async function sbExec(build) {
+  const ctrl  = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), PAY_REQ_TIMEOUT_MS) : null;
   try {
-    const { error } = await _supabase.from('ventas_meseros').insert({
-      mesero_id:     meseroId,
-      mesero_nombre: meseroNombre,
-      mesa_nro:      mesaNro,
-      total:         parseFloat(total.toFixed(2)),
-      metodo_pago:   metodoPago,
-      zona:          zona || 'General',
-      fecha_hora:    new Date().toISOString(), // forzado explícito — no depender del default de DB
-      items: items.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })),
-    });
-    if (error) console.warn('saveVentaMesero DB error:', error.message);
-  } catch(e) { console.warn('saveVentaMesero:', e.message); }
+    const q   = build();
+    const res = await (ctrl && typeof q.abortSignal === 'function' ? q.abortSignal(ctrl.signal) : q);
+    return res || { data: null, error: { message: 'Sin respuesta del servidor' } };
+  } catch (e) {
+    return { data: null, error: { message: e?.message || 'Error de red' } };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+const errText = err => `${err?.message || ''} ${err?.code || ''} ${err?.details || ''} ${err?.hint || ''}`;
+const isPaidLikeStatus = st => typeof st === 'string' && (st.startsWith('Pagado') || st === 'paid' || st === 'served');
+
+// Paso 1 — pedido pagado. Devuelve { conflict } si el pedido cambió por otro lado.
+async function syncCobroOrder(e) {
+  const { data: row, error: e1 } = await sbExec(() =>
+    _supabase.from('orders').select('id, status, paid_at').eq('id', e.orderId).maybeSingle());
+  if (e1) throw new Error(e1.message || 'No se pudo consultar el pedido');
+  if (!row) return { conflict: `Mesa ${e.mesa}: el pedido ya no existe en el sistema` };
+  const st = String(row.status || '');
+  if (st === 'anulado')   return { conflict: `Mesa ${e.mesa}: el pedido fue ANULADO antes de registrarse el cobro` };
+  if (st === 'archivado') return { conflict: `Mesa ${e.mesa}: la caja se cerró antes de registrarse el cobro` };
+  if (isPaidLikeStatus(st)) {
+    // ¿Es nuestro propio intento anterior (la respuesta se perdió)? → mismo paid_at
+    const mismo = row.paid_at && Math.abs(Date.parse(row.paid_at) - Date.parse(e.paidAt)) < 1000;
+    return mismo ? {} : { conflict: `Mesa ${e.mesa}: el pedido ya había sido cobrado desde otro equipo` };
+  }
+  const payload = {
+    status:            buildPayStatusM(e.method),
+    payment_method:    e.method,
+    payment_breakdown: e.breakdown,
+    paid_at:           e.paidAt,
+    updated_at:        new Date().toISOString(),
+  };
+  // Lo que realmente se cobró: el trigger del pago dividido valida contra ESE total.
+  // Nunca se sobrescribe con una lista vacía (p. ej. si el carrito local se perdió).
+  if (Array.isArray(e.items) && e.items.length) {
+    payload.items = orderItemsForDb(e.items.map(i => ({ ...i, sentQty: i.qty })));
+    payload.total = orderTotalOf(e.items);
+  }
+  // Envases: la base recalcula packaging_total y el total (platos + envases)
+  if (e.packCount !== null && e.packCount !== undefined) payload.packaging_count = clampPackaging(e.packCount);
+  const { data, error } = await sbExec(() =>
+    _supabase.from('orders').update(payload).eq('id', e.orderId).in('status', OPEN_ORDER_STATUSES).select('id'));
+  if (error) throw new Error(error.message || 'No se pudo registrar el pago del pedido');
+  if (!data || !data.length) throw new Error('El pedido cambió de estado — se reintentará');
+  return {};
+}
+
+// Paso 2 — mesa libre. Si alguien la REABRIÓ mientras el cobro esperaba, no se toca.
+async function syncCobroMesa(e) {
+  const cutoff = new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString();
+  const { data: abiertos, error: e1 } = await sbExec(() => {
+    let q = _supabase.from('orders').select('id')
+      .eq('table_number', e.mesa).in('status', OPEN_ORDER_STATUSES).gte('created_at', cutoff);
+    if (e.orderId) q = q.neq('id', e.orderId);
+    return q.limit(1);
+  });
+  if (e1) throw new Error(e1.message || 'No se pudo consultar la mesa');
+  if (abiertos && abiertos.length) return; // la mesa ya tiene otro pedido: se deja como está
+  // Sincronización tardía: solo se libera si la mesa sigue a nombre de este mesero
+  const late = Date.now() - Date.parse(e.paidAt) > 60_000;
+  const { error } = await sbExec(() => {
+    let q = _supabase.from('mesas')
+      .update({ estado: 'libre', mesero_nombre: null, mesero_color: null, ultima_actualizacion: new Date().toISOString() })
+      .eq('numero_mesa', e.mesa);
+    if (late && e.waiterName) q = q.eq('mesero_nombre', e.waiterName);
+    return q;
+  });
+  if (error) throw new Error(error.message || 'No se pudo liberar la mesa');
+}
+
+// Paso 3 — venta del mesero (una fila por método si el pago fue dividido).
+// client_op_id único → reintentar nunca duplica la venta.
+async function syncCobroVenta(e, idx) {
+  const leg = e.ventas[idx];
+  const row = {
+    mesero_id:     e.waiterId,
+    mesero_nombre: e.waiterName,
+    mesa_nro:      e.mesa,
+    total:         Math.round(Number(leg.monto) * 100) / 100,
+    metodo_pago:   leg.metodo,
+    zona:          e.zona || 'General',
+    fecha_hora:    e.paidAt, // hora real del cobro
+    items:         e.ventaItems || [],
+    client_op_id:  `${e.opId}:${idx}`,
+  };
+  for (let i = 0; i < 3; i++) {
+    const { error } = await sbExec(() => row.client_op_id
+      ? _supabase.from('ventas_meseros').upsert(row, { onConflict: 'client_op_id', ignoreDuplicates: true })
+      : _supabase.from('ventas_meseros').insert(row));
+    if (!error) return;
+    const t = errText(error);
+    // Base sin migracion-cobros-offline.sql: se registra igual, sin la protección anti-duplicado
+    if (row.client_op_id && /client_op_id|42P10|ON CONFLICT/i.test(t)) { delete row.client_op_id; continue; }
+    if (row.fecha_hora && /fecha_hora/i.test(t)) { delete row.fecha_hora; continue; }
+    throw new Error(error.message || 'No se pudo registrar la venta');
+  }
+  throw new Error('No se pudo registrar la venta');
+}
+
+// Corre los pasos pendientes de UN cobro. `save(fn)` persiste cada avance.
+async function runCobroSteps(entry, save) {
+  let e = entry;
+  const errors = [];
+  let conflict = e.conflict || null;
+  const upd = fn => { e = save(fn) || fn(e); };
+  if (!e.done.order) {
+    try {
+      const r = e.orderId ? await syncCobroOrder(e) : {};
+      if (r.conflict) conflict = r.conflict;
+      upd(x => ({ ...x, conflict: conflict || x.conflict || null, done: { ...x.done, order: true } }));
+    } catch (err) { errors.push(err.message); }
+  }
+  if (e.done.order && !e.done.mesa) {
+    try { await syncCobroMesa(e); upd(x => ({ ...x, done: { ...x.done, mesa: true } })); }
+    catch (err) { errors.push(err.message); }
+  }
+  for (let idx = 0; idx < e.ventas.length; idx++) {
+    if (e.done.ventas[idx]) continue;
+    try {
+      await syncCobroVenta(e, idx);
+      upd(x => { const v = [...x.done.ventas]; v[idx] = true; return { ...x, done: { ...x.done, ventas: v } }; });
+    } catch (err) { errors.push(err.message); }
+  }
+  const complete = e.done.order && e.done.mesa && e.done.ventas.every(Boolean);
+  return { complete, conflict, error: errors[0] || null, entry: e };
+}
+
+async function runCobroEntry(opId, { force = false } = {}) {
+  const e = readPayOutbox().find(x => x.opId === opId);
+  if (!e) return { status: 'gone' };
+  if (!force && e.nextTryAt && Date.now() < e.nextTryAt) return { status: 'waiting', mesa: e.mesa };
+  const r = await runCobroSteps(e, fn => patchPayOutbox(opId, fn));
+  if (r.complete) {
+    patchPayOutbox(opId, () => null); // registrado por completo → sale de la cola
+    return { status: 'ok', mesa: e.mesa, conflict: r.conflict };
+  }
+  const attempts = (r.entry.attempts || 0) + 1;
+  const delay    = Math.min(5 * 60_000, 15_000 * 2 ** Math.min(attempts - 1, 5));
+  patchPayOutbox(opId, x => ({ ...x, attempts, lastError: r.error, nextTryAt: Date.now() + delay }));
+  return { status: 'pending', mesa: e.mesa, error: r.error };
+}
+
+// Procesa la cola en serie (nunca dos sincronizaciones a la vez en esta pestaña).
+let _payChain = Promise.resolve();
+function processPayOutbox(opts = {}) {
+  const run = _payChain.then(async () => {
+    const results = [];
+    const list = readPayOutbox().filter(e => !opts.only || e.opId === opts.only);
+    for (const e of list) {
+      try { results.push({ opId: e.opId, ...(await runCobroEntry(e.opId, opts)) }); }
+      catch (err) { results.push({ opId: e.opId, status: 'pending', error: err?.message }); }
+    }
+    return results;
+  });
+  _payChain = run.catch(() => {});
+  return run;
 }
 
 async function updateMesaEstado(numeroMesa, estado, extra = {}) {
@@ -4827,6 +5033,7 @@ function TurnoScreen({ waiter, ventasTurno, setVentasTurno, turnoStart, setTurno
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:12,fontWeight:700,color:'var(--snow)'}}>
                         Mesa {v.mesa_nro} · {v.zona||'General'}
+                        {v._pendiente && <span style={{marginLeft:6,fontSize:10,fontWeight:700,color:'#F59E0B'}}>⏳ sin sincronizar</span>}
                       </div>
                       <div style={{
                         fontSize:10,color:'var(--mist)',marginTop:2,
@@ -4946,9 +5153,14 @@ async function recoverActiveOrders(waiterId) {
 
     if (error || !data || !data.length) return {};
 
+    // Pedidos ya COBRADOS en este celular cuyo pago aún no llega al servidor
+    // (sin conexión): no se recuperan como abiertos — se cobrarían dos veces.
+    const yaCobrados = pendingCobroOrderIds();
+
     // Deduplicar por mesa — nos quedamos con el pedido más reciente de cada mesa
     const byTable = {};
     data.forEach(ord => {
+      if (yaCobrados.has(ord.id)) return;
       const tbl = ord.table_number;
       if (!byTable[tbl]) {
         byTable[tbl] = {
@@ -5384,8 +5596,17 @@ function App() {
       .order('fecha_hora', { ascending: false })
       .then(({ data, error }) => {
         if (!mounted) return;
-        if (error) console.warn('[Turno] fetch inicial:', error.message);
-        else setVentasTurno(data || []);
+        // Cobros guardados en el celular que aún no llegan al servidor: se
+        // muestran en el turno (marcados como pendientes) para que cuadre la caja.
+        const pend = pendingVentasFor(waiter.id, ts);
+        if (error) {
+          console.warn('[Turno] fetch inicial:', error.message);
+          if (pend.length) setVentasTurno(prev => prev.length ? prev : pend);
+        } else {
+          const rows = data || [];
+          const ids  = new Set(rows.map(v => v.client_op_id).filter(Boolean));
+          setVentasTurno([...pend.filter(p => !ids.has(p.client_op_id)), ...rows]);
+        }
       });
 
     // Suscripción única para todo el turno
@@ -5410,10 +5631,13 @@ function App() {
             // que su contraparte real llegara (parpadeo del total del turno).
             const DEDUP = 30_000;
             const filtered = prev.filter(v => !(
-              v._opt === true &&
-              v.mesa_nro === payload.new.mesa_nro &&
-              v.metodo_pago === payload.new.metodo_pago &&
-              Math.abs(new Date(v.fecha_hora) - ventaTime) < DEDUP
+              v._opt === true && (
+                (payload.new.client_op_id && v.client_op_id === payload.new.client_op_id) || (
+                  v.mesa_nro === payload.new.mesa_nro &&
+                  v.metodo_pago === payload.new.metodo_pago &&
+                  Math.abs(new Date(v.fecha_hora) - ventaTime) < DEDUP
+                )
+              )
             ));
             // Evitar duplicado si ya existe el ID real de Supabase
             if (filtered.some(v => v.id === payload.new.id)) return filtered;
@@ -5753,9 +5977,14 @@ function App() {
         const { data } = await _supabase.from('mesas').select('*').order('numero_mesa');
         if (cancelled || !data) return;
 
+        // Mesas que este celular ya cobró y liberó, pero cuyo cobro aún no llegó
+        // al servidor (sin conexión): no se vuelven a marcar ocupadas.
+        const mesasCobradas = pendingCobroMesas();
+
         setTables(prev => prev.map(t => {
           const m = data.find(r => r.numero_mesa === t.id);
           if (!m) return t;
+          if (m.estado === 'ocupada' && waiter && m.mesero_nombre === waiter.name && mesasCobradas.has(t.id) && !t.occupied) return t;
           if (m.estado === 'libre') {
             if (t.waiterId && waiter && t.waiterId === waiter.id && !t.joinedTo) return t;
             return { ...t, occupied: false, waiterId: null, waiterName: null, waiterColor: null, ...(t.joinedTo ? { items: [], rounds: [], packaging: 0, packagingUnit: null, packagingSaved: 0, cliente: null, descuento: null, openAt: null, joinedTo: null } : {}) };
@@ -5791,7 +6020,7 @@ function App() {
            el localStorage, o tras un cierre accidental de la pestaña. */
         if (waiter) {
           const myMesas = data.filter(
-            m => m.estado === 'ocupada' && m.mesero_nombre === waiter.name
+            m => m.estado === 'ocupada' && m.mesero_nombre === waiter.name && !mesasCobradas.has(m.numero_mesa)
           );
           if (myMesas.length > 0) {
             const recovered = await recoverActiveOrders(waiter.id);
@@ -6654,6 +6883,16 @@ function App() {
     //    comanda. Antes se imprimía primero y el guardado iba en segundo plano:
     //    si fallaba (sin internet), cocina tenía el papel pero el pedido no
     //    existía en el sistema (no se cobraba ni descontaba stock).
+    // 0) Si esta mesa tiene un cobro anterior guardado en el celular que aún no
+    //    llega al servidor, se registra PRIMERO. Si no, la base vería todavía el
+    //    pedido viejo abierto y la mesa "ocupada" (se mezclarían las cuentas).
+    if (pendingCobroMesas().has(selectedTable)) {
+      try { await Promise.race([processPayOutbox({ force: true }), new Promise(r => setTimeout(r, 10_000))]); } catch (_) {}
+      if (pendingCobroMesas().has(selectedTable)) {
+        toast(`Mesa ${selectedTable}: el cobro anterior aún no se registra en el sistema (sin conexión). Espera a que vuelva la señal y envía de nuevo. No se envió ni se imprimió nada.`, 'err');
+        return;
+      }
+    }
     let orderId = null;
     try {
       orderId = await saveOrderToSupabase(selectedTable, items, waiter, zone, round1, tablePack(currentTable), currentTable?.cliente?.id || null);
@@ -6780,7 +7019,11 @@ function App() {
      así el reporte de turno y el panel Personal, que ya suman por
      metodo_pago, no necesitan ningún cambio para contar bien un cobro
      dividido. */
+  const payingRef = useRef(false);
   const handlePayment = async (methodOrSplit) => {
+    if (payingRef.current) return; // evita registrar el mismo cobro dos veces (doble toque)
+    payingRef.current = true;
+    try {
     const items   = currentTable?.items || [];
     const pack    = tablePack(currentTable);
     // Envases: se manda la cantidad final si hay (o hubo) envases en el pedido
@@ -6794,46 +7037,68 @@ function App() {
     const legs    = isSplit ? validateBreakdownM(methodOrSplit.legs, total).legs : null;
     if (isSplit && !legs) { toast('⚠ El desglose del pago ya no coincide con el total — vuelve a intentar', 'err'); return; }
     const method  = isSplit ? 'mixto' : methodOrSplit;
-
-    try {
-      // 1. Marcar el pedido como pagado en Supabase
-      if (orderId) {
-        await updateOrderPayment(orderId, method, isSplit ? legs : null, items, packForDb).catch(e => console.warn('Supabase pay:', e));
-      }
-
-      // 2. Liberar mesa en Supabase — esto dispara el Realtime del panel admin
-      await updateMesaEstado(selectedTable, 'libre', {
-        mesero_nombre: null,
-        mesero_color:  null,
-      });
-
-      // 3. Registrar venta(s) personal(es) del mesero (no bloqueante) — una
-      // fila por cada método si el pago fue dividido, una sola si fue simple.
-      if (isSplit) {
-        legs.forEach(leg => {
-          saveVentaMesero(waiter.id, waiter.name, selectedTable, leg.monto, leg.metodo, zona, items)
-            .catch(e => console.warn('saveVentaMesero (mixto):', e.message));
-        });
-      } else {
-        saveVentaMesero(waiter.id, waiter.name, selectedTable, total, method, zona, items)
-          .catch(e => console.warn('saveVentaMesero:', e.message));
-      }
-
-    } catch(e) {
-      console.warn('handlePayment Supabase error:', e.message);
-      // Aunque falle Supabase, liberamos localmente para no bloquear la operación
-    }
-
-    // 3b. Update optimista del turno — refleja la venta en el estado local
-    // inmediatamente, sin esperar confirmación de Supabase. Si la suscripción
-    // Realtime recibe el/los INSERT reales, reemplazará estas entradas (_opt:true).
-    const ahoraISO = new Date().toISOString();
     const itemsSnap = items.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty }));
     const legsParaOptimista = isSplit ? legs : [{ metodo: method, monto: total }];
+    const ahoraISO = new Date().toISOString();
+
+    // 1. El cobro se guarda PRIMERO en este celular (cola de cobros) y después
+    //    se registra en el sistema: pedido pagado → mesa libre → venta(s) del
+    //    mesero (una fila por método si el pago fue dividido). Si no hay
+    //    internet, queda en la cola y se registra solo al volver la conexión.
+    const entry = {
+      opId:       newOpId(),
+      paidAt:     ahoraISO,
+      waiterId:   waiter.id,
+      waiterName: waiter.name,
+      mesa:       selectedTable,
+      zona,
+      orderId:    orderId || null,
+      method,
+      breakdown:  isSplit ? legs : null,
+      items:      JSON.parse(JSON.stringify(items)),
+      packCount:  packForDb,
+      total,
+      ventas:     legsParaOptimista.map(l => ({ metodo: l.metodo, monto: Math.round(Number(l.monto) * 100) / 100 })),
+      ventaItems: itemsSnap,
+      done:       { order: !orderId, mesa: false, ventas: legsParaOptimista.map(() => false) },
+      attempts:   0,
+      lastError:  null,
+      nextTryAt:  0,
+      conflict:   null,
+    };
+    const queued = addToPayOutbox(entry);
+    let synced = false, conflict = null;
+    if (queued) {
+      // Se espera como máximo 10 s; si la red está lenta el cobro sigue en
+      // segundo plano (y en la cola) — el mesero no se queda bloqueado.
+      const r = await Promise.race([
+        processPayOutbox({ only: entry.opId, force: true }).then(res => res.find(x => x.opId === entry.opId) || null),
+        new Promise(res => setTimeout(() => res(null), 10_000)),
+      ]);
+      synced   = r?.status === 'ok' || r?.status === 'gone';
+      conflict = r?.conflict || null;
+    } else {
+      // No se pudo guardar en el celular (almacenamiento lleno o bloqueado):
+      // se intenta registrar directo. Si tampoco se puede, la mesa NO se
+      // libera para que el cobro pueda repetirse — nunca se pierde en silencio.
+      let mem = entry;
+      const r = await runCobroSteps(entry, fn => (mem = fn(mem)));
+      synced = r.complete; conflict = r.conflict;
+      if (!synced) {
+        toast(`⚠ Mesa ${selectedTable}: no se pudo registrar el cobro (sin conexión) y el celular no permite guardarlo. Inténtalo de nuevo cuando vuelva la señal.`, 'err');
+        return;
+      }
+    }
+
+    // 2. Update optimista del turno — refleja la venta en el estado local
+    // inmediatamente, sin esperar confirmación de Supabase. Si la suscripción
+    // Realtime recibe el/los INSERT reales, reemplazará estas entradas (_opt:true).
     setVentasTurno(prev => [
       ...legsParaOptimista.map((leg, idx) => ({
         id:            `opt_${Date.now()}_${idx}`,
+        client_op_id:  `${entry.opId}:${idx}`,
         _opt:          true, // marcador para que el dedup del Realtime lo reemplace
+        _pendiente:    !synced,
         mesero_id:     waiter.id,
         mesero_nombre: waiter.name,
         mesa_nro:      selectedTable,
@@ -6859,13 +7124,63 @@ function App() {
     const label = isSplit
       ? legs.map(l => `${PAYMENT_METHODS_M.find(m => m.key === l.metodo)?.label || l.metodo} S/${l.monto.toFixed(2)}`).join(' + ')
       : `${PAYMENT_METHODS_M.find(m => m.key === method)?.label || 'Efectivo'} ${PAYMENT_METHODS_M.find(m => m.key === method)?.icon || '💵'}`;
-    toast(`Mesa ${selectedTable} cerrada · ${fmt(total)} · ${label}`, 'ok');
+    if (synced) {
+      toast(`Mesa ${selectedTable} cerrada · ${fmt(total)} · ${label}`, 'ok');
+    } else {
+      toast(`Mesa ${selectedTable} cobrada · ${fmt(total)} · ${label}. Sin conexión: el cobro quedó GUARDADO en este celular y se registrará solo al volver internet.`, 'info');
+    }
+    if (conflict) toast(`⚠ ${conflict}. La venta se registró igual — avisa al administrador.`, 'err');
     setShowPayment(false);
     // Facturación electrónica (VITE_FACTURACION_ELECTRONICA=1): ofrecer boleta/factura
-    if (FACTURACION_ACTIVA && orderId) setComprobantePara({ orderId, mesa: selectedTable, total });
+    // (solo si el pago ya está en el servidor; sin conexión no se puede emitir)
+    if (FACTURACION_ACTIVA && orderId && synced) setComprobantePara({ orderId, mesa: selectedTable, total });
     setSelectedTable(null);
     setPage('mesas');
+    } finally {
+      payingRef.current = false;
+    }
   };
+
+  /* ── Cola de cobros: sincronización automática ──────────────────────────
+     Reintenta los cobros guardados en el celular al abrir la app, al volver
+     internet, al volver a la pestaña y cada 20 s mientras haya pendientes. */
+  const [cobrosPendientes, setCobrosPendientes] = useState(() => readPayOutbox());
+  const syncCobros = useCallback(async (force = false) => {
+    if (!readPayOutbox().length) return;
+    if (!force && typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const results = await processPayOutbox({ force });
+    const ok = results.filter(r => r.status === 'ok');
+    if (ok.length) toast(`✓ ${ok.length} cobro${ok.length > 1 ? 's' : ''} pendiente${ok.length > 1 ? 's' : ''} registrado${ok.length > 1 ? 's' : ''} en el sistema (mesa ${ok.map(r => r.mesa).join(', ')})`, 'ok');
+    ok.filter(r => r.conflict).forEach(r => toast(`⚠ ${r.conflict}. La venta se registró igual — avisa al administrador.`, 'err'));
+  }, [toast]);
+  useEffect(() => {
+    const refresh = () => {
+      const list = readPayOutbox();
+      setCobrosPendientes(list);
+      // Ventas del turno que ya llegaron al servidor dejan de marcarse "sin sincronizar"
+      const pend = new Set();
+      list.forEach(e => e.ventas.forEach((_, i) => { if (!e.done.ventas[i]) pend.add(`${e.opId}:${i}`); }));
+      setVentasTurno(prev => prev.some(v => v._pendiente && !pend.has(v.client_op_id))
+        ? prev.map(v => (v._pendiente && !pend.has(v.client_op_id)) ? { ...v, _pendiente: false } : v)
+        : prev);
+    };
+    const onStorage = ev => { if (ev.key === PAY_OUTBOX_KEY) refresh(); };
+    const onOnline  = () => { syncCobros(true); };
+    const onVisible = () => { if (document.visibilityState === 'visible') syncCobros(true); };
+    window.addEventListener(PAY_OUTBOX_EVT, refresh);
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
+    const iv = setInterval(() => { syncCobros(false); }, 20_000);
+    syncCobros(true);
+    return () => {
+      window.removeEventListener(PAY_OUTBOX_EVT, refresh);
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(iv);
+    };
+  }, [syncCobros]);
 
   /* ── Unir / separar mesas ───── */
   const joinBusyRef = useRef(false);
@@ -6915,6 +7230,17 @@ function App() {
 
   /* ── Cerrar Turno: liberar mesas propias + limpiar sesión + recargar página ── */
   const handleLogoutWaiter = useCallback(async () => {
+    // Paso 0 — Cobros guardados en el celular: intentar registrarlos antes de salir.
+    // Si siguen pendientes NO se pierden (la cola no se borra al cerrar turno),
+    // pero se avisa para que el mesero no borre los datos del navegador.
+    if (readPayOutbox().length) {
+      try { await Promise.race([processPayOutbox({ force: true }), new Promise(r => setTimeout(r, 10_000))]); } catch (_) {}
+      const quedan = readPayOutbox().length;
+      if (quedan && !window.confirm(
+        `Hay ${quedan} cobro${quedan > 1 ? 's' : ''} guardado${quedan > 1 ? 's' : ''} en este celular que aún no se registraron (sin conexión).\n\n` +
+        'Se registrarán solos cuando vuelva internet, siempre que abras la app en ESTE celular y NO borres los datos del navegador.\n\n¿Cerrar turno de todos modos?'
+      )) return;
+    }
     // Paso 1 — Liberar en Supabase todas las mesas propias del mesero
     try {
       const myTables = tables.filter(t => t.waiterId === waiter.id && t.occupied);
@@ -6986,6 +7312,32 @@ function App() {
   return (
     <div style={{height:'100%',display:'flex',flexDirection:'column',position:'relative',zIndex:1}}>
       <Toasts list={toasts} remove={removeToast}/>
+
+      {/* COBROS GUARDADOS EN EL CELULAR, AÚN SIN REGISTRAR EN EL SISTEMA */}
+      {cobrosPendientes.length > 0 && (() => {
+        const n = cobrosPendientes.length;
+        const monto = cobrosPendientes.reduce((s, e) => s + (Number(e.total) || 0), 0);
+        const conError = cobrosPendientes.some(e => (e.attempts || 0) >= 3 && e.lastError);
+        const ultimoError = cobrosPendientes.find(e => e.lastError)?.lastError || '';
+        return (
+          <div role="status" title={ultimoError}
+            style={{position:'fixed',left:12,right:12,bottom:12,zIndex:9998,display:'flex',alignItems:'center',gap:10,
+              background: conError ? '#7F1D1D' : '#78350F', color:'#fff', borderRadius:12, padding:'10px 12px',
+              boxShadow:'0 6px 20px rgba(0,0,0,.35)', fontSize:12.5, lineHeight:1.35}}>
+            <span style={{fontSize:18}}>{conError ? '⚠' : '⏳'}</span>
+            <span style={{flex:1}}>
+              <strong>{n} cobro{n > 1 ? 's' : ''} ({fmt(monto)}) guardado{n > 1 ? 's' : ''} en este celular</strong>
+              {' — '}{conError
+                ? 'no se pudo registrar aún. Revisa la conexión; si sigue, avisa al administrador. NO borres los datos del navegador.'
+                : 'se registrará solo al volver la conexión. No borres los datos del navegador.'}
+            </span>
+            <button onClick={() => syncCobros(true)}
+              style={{background:'#fff',color:'#111',border:0,borderRadius:8,padding:'6px 10px',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+              Reintentar
+            </button>
+          </div>
+        );
+      })()}
 
       {/* KITCHEN READY ALERT */}
       {kitchenAlerts.length > 0 && (
